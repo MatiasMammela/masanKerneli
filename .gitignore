@@ -1,0 +1,9 @@
+limine/
+.vscode
+log.txt
+bochs
+OLD/
+obj/
+iso_root/
+bin/
+image.iso
