@@ -6,7 +6,7 @@ heap_t *heap = NULL; // Define the heap here
 void heap_init()
 {
     // Allocate memory for the heap structure itself
-    heap = (heap_t *)vmm_alloc(sizeof(heap_t), VMM_TABLE_ENTRY_READ_WRITE | VMM_TABLE_ENTRY_PRESENT);
+    heap = (heap_t *)vmm_alloc(sizeof(heap_t), VMM_TABLE_ENTRY_READ_WRITE | VMM_TABLE_ENTRY_PRESENT, &kernel_addrspace);
     if (heap == NULL)
     {
         printf("Failed to initialize heap\n");
@@ -17,7 +17,7 @@ void heap_init()
     heap->total_size = 1024 * 1024;
 
     // Allocate a memory block for the first block within the heap (1MB for the entire heap)
-    heap->first_block = (heap_block *)vmm_alloc(heap->total_size, VMM_TABLE_ENTRY_READ_WRITE | VMM_TABLE_ENTRY_PRESENT);
+    heap->first_block = (heap_block *)vmm_alloc(heap->total_size, VMM_TABLE_ENTRY_READ_WRITE | VMM_TABLE_ENTRY_PRESENT, &kernel_addrspace);
     if (heap->first_block == NULL)
     {
         printf("Failed to allocate first block for the heap\n");
@@ -30,7 +30,7 @@ void heap_init()
     heap->first_block->status = FREE;
     heap->first_block->next = NULL;
     heap->first_block->prev = NULL;
-    printf("Heap initialized with base address %lx\n", (uint64_t)heap->first_block->base);
+    // printf("Heap initialized with base address %lx\n", (uint64_t)heap->first_block->base);
 }
 
 void *malloc(size_t size)
@@ -78,7 +78,7 @@ void *malloc(size_t size)
 
     // If no suitable block was found, expand the heap
     printf("Not enough space! Attempting to allocate an additional %lx bytes...\n", size);
-    heap_block *new_block = (heap_block *)vmm_alloc(size + sizeof(heap_block), VMM_TABLE_ENTRY_READ_WRITE | VMM_TABLE_ENTRY_PRESENT);
+    heap_block *new_block = (heap_block *)vmm_alloc(size + sizeof(heap_block), VMM_TABLE_ENTRY_READ_WRITE | VMM_TABLE_ENTRY_PRESENT, &kernel_addrspace);
     if (!new_block)
     {
         return NULL;

@@ -8,7 +8,7 @@ void pmm_init()
 
     struct limine_memmap_entry **entries = r_memmap->entries;
     hhdm_offset = r_hhdm->offset;
-    // printf("%lx", offset);
+
     long int entry_count = r_memmap->entry_count;
 
     for (long int i = 0; i < entry_count; i++)
@@ -29,6 +29,7 @@ uintptr_t pmm_alloc()
 {
     if (!free_block_ptr)
     {
+        printf("\nPanic at pmm alloc\n");
         panic();
     }
 

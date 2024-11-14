@@ -2,10 +2,58 @@
 #include "pmm.h"
 #include "limineRequest.h"
 #include "hhdm.h"
+#include "heap.h"
 extern uint8_t kernel_size[];
-uint64_t *pml4; // PML4 table
-static struct vmm_block *block_head = NULL;
+struct addrspace kernel_addrspace;
 
+struct addrspace test;
+void enable_paging(void *val)
+{
+    uintptr_t physical_address = (uintptr_t)val - hhdm_offset;
+
+    if (physical_address % PAGE_SIZE != 0)
+    {
+        printf("Pages are not aligned\n");
+        return;
+    }
+
+    // printf("Enabling paging...\n");
+    //  printf("Virtual Address: %lx\n", (uintptr_t)val);
+    //  printf("Physical Address: %lx\n", physical_address);
+
+    asm volatile(
+        "movq %0, %%cr3"
+        :
+        : "r"((uintptr_t)physical_address)
+        : "memory");
+    // printf("Paging enabled with CR3 set to: %lx\n", physical_address);
+}
+
+struct addrspace *create_addrspace()
+{
+    struct addrspace *new_addrspace = malloc(sizeof(struct addrspace));
+
+    new_addrspace->pml4 = (uint64_t *)(pmm_alloc() + hhdm_offset);
+    memset(new_addrspace->pml4, 0, PAGE_SIZE);
+
+    // Create the initial block head
+    struct vmm_block *block_head = PHYS_TO_VIRT(pmm_alloc());
+    block_head->base = ALIGN_TO_PAGE(hhdm_offset);
+    block_head->length = PAGE_SIZE;
+    block_head->flags = VMM_BLOCK_EXEC | VMM_BLOCK_WRITE;
+
+    struct vmm_block *terminator_block = PHYS_TO_VIRT(pmm_alloc());
+    terminator_block->base = 0xFFFFFFFFFFFFF000;
+    terminator_block->length = PAGE_SIZE;
+    terminator_block->flags = 0;
+    terminator_block->next = NULL;
+
+    // Link the blocks
+    block_head->next = terminator_block;
+    new_addrspace->block_head = block_head;
+
+    return new_addrspace;
+}
 uint64_t *get_next_table(uint64_t *table, uint64_t lvl_index, uint8_t flags)
 {
 
@@ -34,12 +82,12 @@ void vmm_map(uint64_t *pml4, void *vaddr, uintptr_t paddr, uint8_t flags)
     lvl1_table[lvl1_index] = paddr | flags;
 }
 
-void *vmm_alloc(size_t size, uint8_t flags)
+void *vmm_alloc(size_t size, uint8_t flags, struct addrspace *addrspace)
 {
     size = ALIGN_TO_PAGE(size);
 
-    struct vmm_block *previous_block = block_head;
-    struct vmm_block *current_block = block_head->next;
+    struct vmm_block *previous_block = addrspace->block_head;
+    struct vmm_block *current_block = addrspace->block_head->next;
 
     while (current_block != NULL)
     {
@@ -60,7 +108,7 @@ void *vmm_alloc(size_t size, uint8_t flags)
             {
                 uintptr_t phys_addr = (uintptr_t)pmm_alloc(); // For every page allocate physical memory for the size of page
 
-                vmm_map(pml4, (void *)((uintptr_t)new_block->base + i),
+                vmm_map(addrspace->pml4, (void *)((uintptr_t)new_block->base + i),
                         phys_addr, VMM_TABLE_ENTRY_READ_WRITE | VMM_TABLE_ENTRY_PRESENT); // Map the newly created pages to vmm map
             }
 
@@ -90,14 +138,18 @@ uint64_t vmm_unmap(uint64_t *pml4, void *vaddr)
     uint64_t phys_addr = lvl1_table[lvl1_index] & ADDRESS_MASK;
 
     lvl1_table[lvl1_index] = 0;
-
+    asm volatile(
+        "invlpg (%0)"
+        :
+        : "r"(phys_addr)
+        : "memory");
     return phys_addr;
 }
 
-void vmm_free(void *addr)
+void vmm_free(void *addr, struct addrspace *addrspace)
 {
-    struct vmm_block *previous_block = block_head;
-    struct vmm_block *current_block = block_head->next;
+    struct vmm_block *previous_block = addrspace->block_head;
+    struct vmm_block *current_block = addrspace->block_head->next;
 
     while (current_block != NULL)
     {
@@ -109,7 +161,7 @@ void vmm_free(void *addr)
             for (size_t i = 0; i < current_block->length; i += PAGE_SIZE)
             {
                 void *vaddr = (void *)(current_block->base + i);
-                uint64_t phys_addr = vmm_unmap(pml4, vaddr);
+                uint64_t phys_addr = vmm_unmap(addrspace->pml4, vaddr);
 
                 if (phys_addr != 0)
                 {
@@ -135,41 +187,56 @@ void test_vmm_alloc()
 
     // Allocate memory blocks
     size_t block_size = PAGE_SIZE;
-    void *addr1 = vmm_alloc(block_size, VMM_TABLE_ENTRY_READ_WRITE);
+    void *addr1 = vmm_alloc(block_size, VMM_TABLE_ENTRY_READ_WRITE, &kernel_addrspace);
     printf("Allocated block 1  %lx\n", addr1);
 
-    void *addr2 = vmm_alloc(block_size, VMM_TABLE_ENTRY_READ_WRITE);
+    void *addr2 = vmm_alloc(block_size, VMM_TABLE_ENTRY_READ_WRITE, &kernel_addrspace);
     printf("Allocated block 2  %lx\n", addr2);
 
-    void *addr3 = vmm_alloc(block_size, VMM_TABLE_ENTRY_READ_WRITE);
+    void *addr3 = vmm_alloc(block_size, VMM_TABLE_ENTRY_READ_WRITE, &kernel_addrspace);
     printf("Allocated block 3  %lx\n", addr3);
 
-    void *addr4 = vmm_alloc(block_size, VMM_TABLE_ENTRY_READ_WRITE);
+    void *addr4 = vmm_alloc(block_size, VMM_TABLE_ENTRY_READ_WRITE, &kernel_addrspace);
     printf("Allocated block 4  %lx\n", addr4);
 
     // Free memory blocks
-    vmm_free(addr1);
+    vmm_free(addr1, &kernel_addrspace);
     printf("\nFreed block 1  %lx\n", addr1);
 
-    vmm_free(addr2);
+    vmm_free(addr2, &kernel_addrspace);
     printf("Freed block 2  %lx\n", addr2);
 
-    vmm_free(addr3);
+    vmm_free(addr3, &kernel_addrspace);
     printf("Freed block 3 %lx\n", addr3);
 
-    vmm_free(addr4);
+    vmm_free(addr4, &kernel_addrspace);
     printf("Freed block 4  %lx\n", addr4);
 
-    void *addr5 = vmm_alloc(block_size, VMM_TABLE_ENTRY_READ_WRITE);
+    void *addr5 = vmm_alloc(block_size, VMM_TABLE_ENTRY_READ_WRITE, &kernel_addrspace);
     printf("Allocated block   %lx\n", addr5);
+}
+void vmm_init_blocks()
+{
+
+    kernel_addrspace.block_head = PHYS_TO_VIRT(pmm_alloc());
+    kernel_addrspace.block_head->base = ALIGN_TO_PAGE(hhdm_offset);
+    kernel_addrspace.block_head->length = ALIGN_TO_PAGE(sizeof(hhdm_offset));
+    kernel_addrspace.block_head->flags = VMM_BLOCK_EXEC | VMM_BLOCK_WRITE;
+
+    struct vmm_block *kernel_block = PHYS_TO_VIRT(pmm_alloc());
+    kernel_block->base = r_kernel_address->virtual_base;
+    kernel_block->length = (size_t)kernel_size;
+    kernel_block->flags = VMM_BLOCK_EXEC | VMM_BLOCK_WRITE;
+
+    kernel_addrspace.block_head->next = kernel_block;
 }
 
 void vmm_init()
 {
 
-    pml4 = (uint64_t *)(pmm_alloc() + hhdm_offset); // pml4 to the hhdm_offset
+    kernel_addrspace.pml4 = (uint64_t *)(pmm_alloc() + hhdm_offset); // pml4 to the hhdm_offset
 
-    memset(pml4, 0, PAGE_SIZE);
+    memset(kernel_addrspace.pml4, 0, PAGE_SIZE);
 
     for (unsigned int i = 0; i < r_memmap->entry_count; i++)
     {
@@ -180,28 +247,15 @@ void vmm_init()
             {
                 break;
             }
-            vmm_map(pml4, (void *)PHYS_TO_VIRT(entry->base + j), entry->base + j, PTE_BIT_PRESENT);
+            vmm_map(kernel_addrspace.pml4, (void *)PHYS_TO_VIRT(entry->base + j), entry->base + j, PTE_BIT_PRESENT | VMM_TABLE_ENTRY_READ_WRITE);
         }
     }
 
     for (size_t i = 0; i < ((size_t)kernel_size); i += PAGE_SIZE)
     {
-        vmm_map(pml4, (void *)r_kernel_address->virtual_base + i, r_kernel_address->physical_base + i, VMM_TABLE_ENTRY_READ_WRITE | VMM_TABLE_ENTRY_PRESENT);
+        vmm_map(kernel_addrspace.pml4, (void *)r_kernel_address->virtual_base + i, r_kernel_address->physical_base + i, VMM_TABLE_ENTRY_READ_WRITE | VMM_TABLE_ENTRY_PRESENT);
     }
-}
 
-void vmm_init_blocks()
-{
-
-    block_head = PHYS_TO_VIRT(pmm_alloc());
-    block_head->base = ALIGN_TO_PAGE(hhdm_offset);
-    block_head->length = ALIGN_TO_PAGE(sizeof(hhdm_offset));
-    block_head->flags = VMM_BLOCK_EXEC | VMM_BLOCK_WRITE;
-
-    struct vmm_block *kernel_block = PHYS_TO_VIRT(pmm_alloc());
-    kernel_block->base = r_kernel_address->virtual_base;
-    kernel_block->length = (size_t)kernel_size;
-    kernel_block->flags = VMM_BLOCK_EXEC | VMM_BLOCK_WRITE;
-
-    block_head->next = kernel_block;
+    enable_paging(kernel_addrspace.pml4);
+    vmm_init_blocks();
 }

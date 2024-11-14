@@ -17,6 +17,7 @@
 
 #define ALIGN_TO_PAGE(addr) (((uintptr_t)(addr) + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1))
 #define PTE_BIT_PRESENT 1
+
 struct vmm_block
 {
     uintptr_t base;
@@ -24,11 +25,17 @@ struct vmm_block
     size_t flags;
     struct vmm_block *next;
 };
-
-extern void *vmm_alloc(size_t size, uint8_t flags);
+struct addrspace
+{
+    uint64_t *pml4;
+    struct vmm_block *block_head;
+};
+extern void *vmm_alloc(size_t size, uint8_t flags, struct addrspace *addrspace);
 extern void test_vmm_alloc();
 extern void vmm_init();
 extern void vmm_init_blocks();
+extern struct addrspace *create_addrspace();
+extern struct addrspace kernel_addrspace;
 #endif // VMM_H
 
 // The 4 levels of page directories/tables are:

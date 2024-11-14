@@ -20,9 +20,9 @@ void general_exception_handler()
 void page_fault_handler()
 {
     printf("Page fault exception occurred");
-    uint64_t cr2_value;
-    asm volatile("movq %%cr2, %0" : "=r"(cr2_value));
-    printf("\n%lx", cr2_value);
+    uintptr_t faulting_address;
+    asm volatile("mov %%cr2, %0" : "=r"(faulting_address));
+    printf("\n%lx", faulting_address);
     while (1)
         ;
 }

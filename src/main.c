@@ -7,6 +7,7 @@
 #include "idt.h"
 #include "hhdm.h"
 #include "heap.h"
+#include "scheduler.h"
 uint64_t hhdm_offset = 0;
 static void hcf(void)
 {
@@ -21,6 +22,7 @@ __attribute__((noreturn)) void panic()
     hcf();
     __builtin_unreachable();
 }
+
 void kmain(void)
 {
 
@@ -38,11 +40,13 @@ void kmain(void)
     gdt_init();
 
     idt_init();
-    vmm_init_blocks();
-    // test_vmm_alloc();
 
+    // test_vmm_alloc();
     heap_init();
-    test_heap();
+    // test_heap();
+    scheduler_init();
+    //  debug_scheduler();
+
     printf("END \n");
     hcf();
 }
